@@ -1,23 +1,44 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
+import "dotenv/config";
 
 export const sendEmail = async (options) => {
-  // Create reusable transporter using Gmail SMTP or any email service
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: "pirjifauziya@gmail.com",
-      pass: "lxcw epvu zorz qkez",
-    },
-  });
+  const apiKey = process.env.RESEND_API_KEY?.trim();
 
-  // Mail details
-  const mailOptions = {
-    from: '"SmartCommerce Support" <no-reply@smartcommerce.com>',
-    to: options.email,
-    subject: options.subject,
-    html: options.htmlMessage,
-  };
+  // Safety check: Prevent server crash if .env key is missing
+  if (!apiKey || !apiKey.startsWith("re_")) {
+    console.error(
+      "❌ [RESEND ERROR]: Missing or invalid RESEND_API_KEY in .env. Please add RESEND_API_KEY=re_xxxx"
+    );
+    return {
+      success: false,
+      message: "Email service not configured. Missing RESEND_API_KEY.",
+    };
+  }
 
-  // Send the email
-  await transporter.sendMail(mailOptions);
+  const toEmail = options.email || options.to;
+  const subject = options.subject || "SmartCommerce Notification";
+  const htmlContent = options.htmlMessage || options.html || "";
+
+  try {
+    const resend = new Resend(apiKey);
+
+    const { data, error } = await resend.emails.send({
+      // Resend's free verified sandbox sender
+      from: "SmartCommerce <onboarding@resend.dev>",
+      to: [toEmail],
+      subject: subject,
+      html: htmlContent,
+    });
+
+    if (error) {
+      console.error("❌ [RESEND API ERROR]:", error);
+      return { success: false, error };
+    }
+
+    console.log(`✅ [RESEND DELIVERED]: Email sent to ${toEmail} (ID: ${data?.id})`);
+    return { success: true, id: data?.id };
+  } catch (err) {
+    console.error("❌ [RESEND EXCEPTION]:", err.message);
+    return { success: false, error: err.message };
+  }
 };

@@ -1,7 +1,7 @@
 import User from "../model/User.js";
 import Order from "../model/Order.js";
 import ContactMessage from "../model/ContactMessage.js";
-import nodemailer from "nodemailer";
+import { sendEmail } from "../utils/sendEmail.js";
 
 // Helper function to format date
 const formatDate = (date) => {
@@ -229,54 +229,40 @@ export const replyContactMessage = async (req, res) => {
         message: "Contact message record not found.",
       });
     }
-
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || "smtp.gmail.com",
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: false,
-      auth: {
-        user: process.env.SMTP_USER || "your-support-email@gmail.com",
-        pass: process.env.SMTP_PASS || "your-app-password",
-      },
-    });
-
-    const mailOptions = {
-      from: `"SmartCommerce Support" <support@smartcommerce.com>`,
-      to: contactMsg.email,
-      subject: `Re: [${contactMsg.subject.toUpperCase()}] Support Request - SmartCommerce`,
-      html: `
-        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden;">
-          <div style="background-color: #287b6d; padding: 20px; text-align: center; color: #ffffff;">
-            <h1 style="margin: 0; font-size: 22px;">SmartCommerce Support</h1>
-          </div>
-          <div style="padding: 24px;">
-            <p>Hello <strong>${contactMsg.name}</strong>,</p>
-            <p>Thank you for reaching out to SmartCommerce. Here is our response regarding your request for <strong>${contactMsg.subject}</strong>${contactMsg.orderId ? ` (Order ID: ${contactMsg.orderId})` : ""}:</p>
-            
-            <div style="background-color: #f9f9f9; border-left: 4px solid #287b6d; padding: 16px; margin: 20px 0; border-radius: 6px;">
-              <p style="margin: 0; white-space: pre-line;">${replyText.trim()}</p>
-            </div>
-            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-            
-            <p style="font-size: 12px; color: #777; margin-bottom: 4px;">Your original enquiry:</p>
-            <blockquote style="font-size: 13px; color: #555; margin: 0; padding-left: 12px; border-left: 2px solid #ccc; font-style: italic;">
-              "${contactMsg.message}"
-            </blockquote>
-          </div>
-          <div style="background-color: #f4f4f4; padding: 16px; text-align: center; font-size: 12px; color: #666;">
-            &copy; ${new Date().getFullYear()} SmartCommerce. All rights reserved.
-          </div>
+    const htmlMessage = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden;">
+        <div style="background-color: #0f172a; padding: 20px; text-align: center; color: #ffffff;">
+          <h1 style="margin: 0; font-size: 22px;">SmartCommerce Support</h1>
         </div>
-      `,
-    };
-
-    await transporter.sendMail(mailOptions);
-
+        <div style="padding: 24px;">
+          <p>Hello <strong>${contactMsg.name}</strong>,</p>
+          <p>Thank you for reaching out to SmartCommerce. Here is our response regarding your enquiry for <strong>${contactMsg.subject}</strong>${contactMsg.orderId ? ` (Order ID: ${contactMsg.orderId})` : ""}:</p>
+          
+          <div style="background-color: #f8fafc; border-left: 4px solid #0f172a; padding: 16px; margin: 20px 0; border-radius: 6px;">
+            <p style="margin: 0; white-space: pre-line; color: #1e293b;">${replyText.trim()}</p>
+          </div>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+          
+          <p style="font-size: 12px; color: #777; margin-bottom: 4px;">Your original enquiry:</p>
+          <blockquote style="font-size: 13px; color: #555; margin: 0; padding-left: 12px; border-left: 2px solid #ccc; font-style: italic;">
+            "${contactMsg.message}"
+          </blockquote>
+        </div>
+        <div style="background-color: #f8fafc; padding: 16px; text-align: center; font-size: 12px; color: #64748b;">
+          &copy; ${new Date().getFullYear()} SmartCommerce Platform. All rights reserved.
+        </div>
+      </div>
+    `;
+    // Send using unified email sender
+    await sendEmail({
+      email: contactMsg.email,
+      subject: `Re: [${contactMsg.subject.toUpperCase()}] Support Response - SmartCommerce`,
+      htmlMessage,
+    });
     contactMsg.status = "resolved";
     contactMsg.adminNote = adminNote || replyText;
     contactMsg.respondedAt = new Date();
     await contactMsg.save();
-
     return res.status(200).json({
       success: true,
       message: `Reply email sent successfully to ${contactMsg.email}`,

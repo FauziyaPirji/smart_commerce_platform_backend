@@ -2,7 +2,6 @@ import User from "../model/User.js";
 import axios from "axios";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import nodemailer from "nodemailer";
 import generateToken from "../utils/jwtUtils.js";
 import { sendEmail } from "../utils/sendEmail.js";
 
@@ -17,64 +16,45 @@ const maskEmail = (email) => {
   const last = name[name.length - 1];
   return `${first}****${last}@${domain}`;
 };
+
 // Helper: Send Real HTML Email with 6-Digit OTP
 const sendVerificationEmail = async (toEmail, otp) => {
-  const emailUser = process.env.EMAIL_USER;
-  const emailPass = process.env.EMAIL_PASS;
-  // Real Email Dispatch via Nodemailer
-  if (emailUser && emailPass && emailUser !== "your_email@gmail.com") {
-    try {
-      const transporter = nodemailer.createTransport({
-        service: process.env.EMAIL_SERVICE || "gmail",
-        auth: {
-          user: emailUser,
-          pass: emailPass,
-        },
-      });
-      const mailOptions = {
-        from:
-          process.env.EMAIL_FROM || `"SmartCommerce Security" <${emailUser}>`,
-        to: toEmail,
-        subject: `${otp} is your SmartCommerce verification code`,
-        html: `
-          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
-            <div style="text-align: center; margin-bottom: 24px;">
-              <h2 style="color: #0f172a; margin: 0; font-size: 22px; font-weight: 800;">SmartCommerce</h2>
-              <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">2-Step Identity Verification</p>
-            </div>
-            <p style="color: #334155; font-size: 14px; line-height: 22px;">
-              A sign-in attempt was initiated for your SmartCommerce account. Use the following security code to complete your login:
-            </p>
-            <div style="text-align: center; margin: 28px 0;">
-              <div style="display: inline-block; background-color: #f0fdf4; border: 2px dashed #22c55e; border-radius: 12px; padding: 14px 28px;">
-                <span style="font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #15803d;">${otp}</span>
-              </div>
-              <p style="color: #64748b; font-size: 12px; margin-top: 10px;">This code will expire in <strong>10 minutes</strong>.</p>
-            </div>
-            <p style="color: #64748b; font-size: 12px; line-height: 18px; border-top: 1px solid #f1f5f9; padding-top: 20px;">
-              If you did not make this request, someone else may have entered your password. Please sign in and change your password immediately.
-            </p>
-          </div>
-        `,
-      };
-      await transporter.sendMail(mailOptions);
-      console.log(
-        `[EMAIL DISPATCHED] Successfully sent 2FA code to ${toEmail}`,
-      );
-      return true;
-    } catch (mailErr) {
-      console.error("[NODEMAILER ERROR]:", mailErr.message);
-    }
+  const htmlMessage = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <h2 style="color: #0f172a; margin: 0; font-size: 22px; font-weight: 800;">SmartCommerce</h2>
+        <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">2-Step Identity Verification</p>
+      </div>
+      <p style="color: #334155; font-size: 14px; line-height: 22px;">
+        A sign-in attempt was initiated for your SmartCommerce account. Use the following security code to complete your login:
+      </p>
+      <div style="text-align: center; margin: 28px 0;">
+        <div style="display: inline-block; background-color: #f0fdf4; border: 2px dashed #22c55e; border-radius: 12px; padding: 14px 28px;">
+          <span style="font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #15803d;">${otp}</span>
+        </div>
+        <p style="color: #64748b; font-size: 12px; margin-top: 10px;">This code will expire in <strong>10 minutes</strong>.</p>
+      </div>
+      <p style="color: #64748b; font-size: 12px; line-height: 18px; border-top: 1px solid #f1f5f9; padding-top: 20px;">
+        If you did not make this request, someone else may have entered your password. Please sign in and change your password immediately.
+      </p>
+    </div>
+  `;
+  try {
+    await sendEmail({
+      email: toEmail,
+      subject: `${otp} is your SmartCommerce verification code`,
+      htmlMessage,
+    });
+    console.log(`[EMAIL DISPATCHED] Successfully sent 2FA code to ${toEmail}`);
+    return true;
+  } catch (err) {
+    console.error("[EMAIL DISPATCH ERROR]:", err.message);
+    // Development console fallback
+    console.log(`\n📧 [FALLBACK OTP FOR TESTING]: ${otp} for ${toEmail}\n`);
+    return true;
   }
-  // Local Console Fallback for Immediate Testing
-  console.log(`\n======================================================`);
-  console.log(`📧 [2-STEP EMAIL VERIFICATION CODE DISPATCH]`);
-  console.log(`Recipient : ${toEmail}`);
-  console.log(`Code      : [ ${otp} ]`);
-  console.log(`Expires   : 10 minutes`);
-  console.log(`======================================================\n`);
-  return true;
 };
+
 // 1. STEP 1: VERIFY PASSWORD -> DISPATCH 6-DIGIT EMAIL CODE
 export const loginUser = async (req, res) => {
   try {
