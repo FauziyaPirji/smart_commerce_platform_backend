@@ -326,7 +326,7 @@ export const getVendors = async (req, res) => {
 export const getVendorById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    // Safety bypass: if a sub-route was caught, pass to next middleware or delegate
+    // Safety bypass: if a sub-route was caught, delegate to respective handler
     if (id === "dashboard") {
       if (typeof next === "function") return next();
       return res.status(404).json({ success: false, message: "Route not found" });
@@ -342,11 +342,136 @@ export const getVendorById = async (req, res, next) => {
       if (typeof next === "function") return next();
       return res.status(400).json({ success: false, message: "Invalid Vendor ID format." });
     }
-    const vendor = await VendorProfile.findById(id).populate("user", "name email phone role");
+    // 1. Fetch Vendor Profile with populated User and Categories
+    let vendor = await VendorProfile.findOne({
+      $or: [{ _id: id }, { user: id }],
+    })
+      .populate("categories", "name slug")
+      .populate("user", "firstName middleName lastName email phone gender role")
+      .lean();
     if (!vendor) {
       return res.status(404).json({ success: false, message: "Vendor not found." });
     }
-    return res.status(200).json({ success: true, vendor });
+    // 2. Gather all associated Vendor Identity IDs
+    const vendorIds = [vendor._id];
+    if (vendor.user?._id) {
+      vendorIds.push(vendor.user._id);
+    } else if (vendor.user) {
+      vendorIds.push(vendor.user);
+    }
+    // 3. Fetch All Products Owned by this Vendor
+    const products = await Product.find({
+      $or: [
+        { vendor: { $in: vendorIds } },
+        { vendorId: { $in: vendorIds.map(String) } },
+        { user: { $in: vendorIds } },
+      ],
+    })
+      .populate("category", "name")
+      .sort({ createdAt: -1 })
+      .lean();
+    const productIds = products.map((p) => p._id);
+    const productCount = products.length;
+    // 4. Fetch OrderItems & Orders for this Vendor
+    const vendorItems = await OrderItem.find({
+      $or: [
+        { vendor: { $in: vendorIds } },
+        { vendorId: { $in: vendorIds.map(String) } },
+        { product: { $in: productIds } },
+      ],
+    }).lean();
+    // Extract Order IDs
+    const orderIds = [
+      ...new Set(
+        vendorItems
+          .map((item) => String(item.order?._id || item.order || item.orderId || ""))
+          .filter(Boolean)
+      ),
+    ];
+    // Fetch master orders
+    const orders = await Order.find({
+      $or: [
+        { _id: { $in: orderIds } },
+        { vendor: { $in: vendorIds } },
+        { vendorId: { $in: vendorIds.map(String) } },
+      ],
+    })
+      .populate("user", "name firstName lastName email phone")
+      .sort({ createdAt: -1 })
+      .lean();
+    // 5. Calculate Real Gross Revenue & Order Count
+    let grossRevenue = 0;
+    vendorItems.forEach((item) => {
+      const price = Number(item.price || item.unitPrice || 0);
+      const qty = Number(item.quantity || item.qty || 1);
+      const subtotal = Number(item.subtotal || price * qty);
+      grossRevenue += subtotal;
+    });
+    // Fallback calculation from orders if orderItems was empty
+    if (grossRevenue === 0 && orders.length > 0) {
+      grossRevenue = orders.reduce(
+        (sum, ord) => sum + Number(ord.totalAmount || ord.totalPrice || ord.amount || 0),
+        0
+      );
+    }
+    const orderCount = orders.length > 0 ? orders.length : vendorItems.length;
+    // 6. Format Top 6 Products for Display
+    const formattedProducts = products.slice(0, 8).map((p) => ({
+      id: p._id,
+      name: p.name || p.title || "Product",
+      price: Number(p.price || 0),
+      stock: Number(p.stock ?? 0),
+      category: p.category?.name || vendor.categories?.[0]?.name || "General",
+      image: p.images?.[0] || p.image || p.thumbnail || "",
+      status: Number(p.stock ?? 0) > 0 ? "In Stock" : "Out of Stock",
+    }));
+    // 7. Format Top 6 Recent Orders for Display
+    const formattedOrders = orders.slice(0, 6).map((ord) => {
+      const ordId = String(ord._id);
+      const items = vendorItems.filter((it) => {
+        const itOrd = String(it.order?._id || it.order || it.orderId || "");
+        return itOrd === ordId;
+      });
+      const orderAmount =
+        items.length > 0
+          ? items.reduce(
+              (sum, it) =>
+                sum + Number(it.subtotal || (it.price || it.unitPrice || 0) * (it.quantity || 1)),
+              0
+            )
+          : Number(ord.totalAmount || ord.totalPrice || ord.amount || 0);
+      const customerName =
+        ord.user?.name ||
+        `${ord.user?.firstName || ""} ${ord.user?.lastName || ""}`.trim() ||
+        ord.shippingAddress?.fullName ||
+        "Customer";
+      return {
+        id: ord.orderNumber || `#${ordId.slice(-6).toUpperCase()}`,
+        orderDocId: ordId,
+        customer: customerName,
+        date: new Date(ord.createdAt || ord.placedAt || Date.now()).toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        }),
+        amount: orderAmount,
+        status: ord.orderStatus || "Placed",
+        itemsCount: items.length > 0 ? items.length : 1,
+      };
+    });
+    // 8. Return Enriched Vendor Object
+    return res.status(200).json({
+      success: true,
+      vendor: {
+        ...vendor,
+        productCount,
+        orderCount,
+        revenue: grossRevenue,
+        totalEarnings: grossRevenue,
+        productsList: formattedProducts,
+        recentOrders: formattedOrders,
+      },
+    });
   } catch (error) {
     console.error("Get Vendor By ID Error:", error);
     return res.status(500).json({ success: false, message: error.message });
