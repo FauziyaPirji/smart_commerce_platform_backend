@@ -389,7 +389,7 @@ export const forgotPassword = async (req, res) => {
       });
     }
     // 2. Create Password Reset HTML Email Content
-    const resetUrl = `http://localhost:3000/reset-password?email=${user.email}`;
+    const resetUrl = `https://smart-commerce-platform.vercel.app/reset-password?email=${user.email}`;
     const htmlMessage = `
       <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; rounded: 10px;">
         <h2>Password Reset Request</h2>

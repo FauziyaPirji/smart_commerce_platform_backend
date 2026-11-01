@@ -342,7 +342,7 @@ export const getVendorById = async (req, res, next) => {
       if (typeof next === "function") return next();
       return res.status(400).json({ success: false, message: "Invalid Vendor ID format." });
     }
-    const vendor = await VendorProfile.findById(id).populate("user", "name email role");
+    const vendor = await VendorProfile.findById(id).populate("user", "name email phone role");
     if (!vendor) {
       return res.status(404).json({ success: false, message: "Vendor not found." });
     }
