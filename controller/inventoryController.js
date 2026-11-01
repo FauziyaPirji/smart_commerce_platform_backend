@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import InventoryLog from "../model/InventoryLog.js";
+import VendorProfile from "../model/VendorProfile.js";
 import Product from "../model/Product.js";
 
 // Helper: Safely resolve vendor/user ID from any token structure
