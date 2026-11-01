@@ -12,6 +12,8 @@ const getVendorId = (req) => {
     (typeof req.user === "string" ? req.user : null) ||
     req.user?.user?._id ||
     req.user?.user?.id ||
+    req.vendor?._id ||          
+    req.user?.vendorProfile ||  
     null
   );
 };
@@ -270,87 +272,68 @@ export const adjustStock = async (req, res) => {
 // 4. GET INVENTORY AUDIT LOGS (FAILSAFE & SCOPED)
 export const getInventoryLogs = async (req, res) => {
   try {
-    const vendorId = getVendorId(req);
-    const { productId, type, reason, page = 1, limit = 20, search } = req.query;
-
-    // 1. Find all product IDs belonging to this vendor
+    const vendorId = getVendorId(req); // This should return VendorProfile._id
+    const { productId, type, reason, page = 1, limit = 20 } = req.query;
+    // 1. Find all products belonging to this vendor
     const vendorProducts = await Product.find({
       $or: [
         { vendor: vendorId },
-        { vendor: req.user?._id },
         { vendorId: vendorId },
-        { vendorId: req.user?._id },
       ],
     }).select("_id name sku");
-
     const vendorProductIds = vendorProducts.map((p) => p._id);
-
-    // 2. Base Vendor Scope Query
+    if (vendorProductIds.length === 0 && !vendorId) {
+      return res.json({
+        success: true,
+        logs: [],
+        pagination: { totalLogs: 0, totalPages: 1, currentPage: 1, limit: 20 },
+        summary: { totalTransactions: 0, totalAdded: 0, totalSubtracted: 0, netChange: 0 },
+      });
+    }
+    // 2. Base vendor scope — ONLY this vendor's logs
+    // InventoryLog.vendor = VendorProfile ID (not User ID)
     const baseVendorQuery = {
       $or: [
-        { vendor: vendorId },
-        { vendor: req.user?._id },
-        { product: { $in: vendorProductIds } },
+        { vendor: vendorId },                        // Direct vendor match
+        { product: { $in: vendorProductIds } },      // Product belongs to vendor
       ],
     };
-
-    // 3. Build Active Filter Query (clone base query)
-    const query = { ...baseVendorQuery };
-
+    // 3. Build active filter on top of vendor scope
+    const query = {
+      $and: [
+        { $or: baseVendorQuery.$or },   // Always enforce vendor scope
+      ],
+    };
     if (productId && mongoose.Types.ObjectId.isValid(productId)) {
-      query.product = productId;
+      query.$and.push({ product: new mongoose.Types.ObjectId(productId) });
     }
-
     if (type && ["add", "subtract"].includes(type)) {
-      query.type = type;
+      query.$and.push({ type });
     }
-
     if (reason && reason !== "All") {
-      query.reason = reason;
+      query.$and.push({ reason });
     }
-
-    // Optional backend search by note or matched products
-    if (search && search.trim() !== "") {
-      const searchRegex = new RegExp(search.trim(), "i");
-      const matchedProdIds = vendorProducts
-        .filter((p) => searchRegex.test(p.name) || searchRegex.test(p.sku))
-        .map((p) => p._id);
-
-      query.$and = [
-        {
-          $or: [
-            { auditNote: searchRegex },
-            { product: { $in: matchedProdIds } },
-          ],
-        },
-      ];
-    }
-
-    const pageNum = parseInt(page, 10) || 1;
-    const limitNum = parseInt(limit, 10) || 20;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(50, parseInt(limit, 10) || 20);
     const skip = (pageNum - 1) * limitNum;
-
-    const totalLogs = await InventoryLog.countDocuments(query);
-
-    const logs = await InventoryLog.find(query)
-      .populate("product", "name title sku images image price category")
-      .populate("adjustedBy", "name firstName lastName email")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum);
-
-    // 4. Calculate Lifetime Vendor Totals (Not affected by current page filters)
-    const allVendorLogs =
-      await InventoryLog.find(baseVendorQuery).select("type quantity");
-
+    // 4. Paginated logs
+    const [totalLogs, logs, allVendorLogs] = await Promise.all([
+      InventoryLog.countDocuments(query),
+      InventoryLog.find(query)
+        .populate("product", "name title sku images image price")
+        .populate("adjustedBy", "name firstName lastName email")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      // Summary uses base scope only (not filtered) for accurate lifetime totals
+      InventoryLog.find({ $or: baseVendorQuery.$or }).select("type quantity"),
+    ]);
     const totalAdded = allVendorLogs
       .filter((l) => l.type === "add")
       .reduce((sum, l) => sum + (l.quantity || 0), 0);
-
     const totalSubtracted = allVendorLogs
       .filter((l) => l.type === "subtract")
       .reduce((sum, l) => sum + (l.quantity || 0), 0);
-
     res.json({
       success: true,
       logs,
@@ -369,8 +352,6 @@ export const getInventoryLogs = async (req, res) => {
     });
   } catch (error) {
     console.error("Get inventory logs error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch inventory logs." });
+    res.status(500).json({ success: false, message: "Failed to fetch inventory logs." });
   }
 };
