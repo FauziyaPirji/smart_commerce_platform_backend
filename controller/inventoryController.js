@@ -272,9 +272,19 @@ export const adjustStock = async (req, res) => {
 // 4. GET INVENTORY AUDIT LOGS (FAILSAFE & SCOPED)
 export const getInventoryLogs = async (req, res) => {
   try {
-    const vendorId = getVendorId(req); // This should return VendorProfile._id
+    // ✅ KEY FIX: JWT has User._id but InventoryLog.vendor = VendorProfile._id
+    // So we must look up VendorProfile first using the User._id from token
+    const userId = req.user?.id || req.user?._id;
+    const vendorProfile = await VendorProfile.findOne({ user: userId }).select("_id");
+    if (!vendorProfile) {
+      return res.status(403).json({
+        success: false,
+        message: "Vendor profile not found for this account.",
+      });
+    }
+    const vendorId = vendorProfile._id; // ✅ This is VendorProfile._id — matches InventoryLog.vendor
     const { productId, type, reason, page = 1, limit = 20 } = req.query;
-    // 1. Find all products belonging to this vendor
+    // Find all products belonging to this vendor (for fallback matching)
     const vendorProducts = await Product.find({
       $or: [
         { vendor: vendorId },
@@ -282,28 +292,15 @@ export const getInventoryLogs = async (req, res) => {
       ],
     }).select("_id name sku");
     const vendorProductIds = vendorProducts.map((p) => p._id);
-    if (vendorProductIds.length === 0 && !vendorId) {
-      return res.json({
-        success: true,
-        logs: [],
-        pagination: { totalLogs: 0, totalPages: 1, currentPage: 1, limit: 20 },
-        summary: { totalTransactions: 0, totalAdded: 0, totalSubtracted: 0, netChange: 0 },
-      });
-    }
-    // 2. Base vendor scope — ONLY this vendor's logs
-    // InventoryLog.vendor = VendorProfile ID (not User ID)
-    const baseVendorQuery = {
+    // Base scope — only this vendor's logs
+    const baseScope = {
       $or: [
-        { vendor: vendorId },                        // Direct vendor match
-        { product: { $in: vendorProductIds } },      // Product belongs to vendor
+        { vendor: vendorId },
+        { product: { $in: vendorProductIds } },
       ],
     };
-    // 3. Build active filter on top of vendor scope
-    const query = {
-      $and: [
-        { $or: baseVendorQuery.$or },   // Always enforce vendor scope
-      ],
-    };
+    // Build filtered query — always wrapped in vendor scope
+    const query = { $and: [{ $or: baseScope.$or }] };
     if (productId && mongoose.Types.ObjectId.isValid(productId)) {
       query.$and.push({ product: new mongoose.Types.ObjectId(productId) });
     }
@@ -316,7 +313,7 @@ export const getInventoryLogs = async (req, res) => {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.min(50, parseInt(limit, 10) || 20);
     const skip = (pageNum - 1) * limitNum;
-    // 4. Paginated logs
+    // Run all queries in parallel for performance
     const [totalLogs, logs, allVendorLogs] = await Promise.all([
       InventoryLog.countDocuments(query),
       InventoryLog.find(query)
@@ -325,8 +322,8 @@ export const getInventoryLogs = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum),
-      // Summary uses base scope only (not filtered) for accurate lifetime totals
-      InventoryLog.find({ $or: baseVendorQuery.$or }).select("type quantity"),
+      // Summary always uses full vendor scope (ignores current page filters)
+      InventoryLog.find({ $or: baseScope.$or }).select("type quantity"),
     ]);
     const totalAdded = allVendorLogs
       .filter((l) => l.type === "add")
